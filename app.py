@@ -1,215 +1,70 @@
-import io
-from flask import Flask, render_template_string, Response, request
+import subprocess
+import sys
+
+required_packages = ['flask', 'pyautogui', 'mss', 'pillow']
+for package in required_packages:
+    try:
+        __import__(package)
+    except ImportError:
+        subprocess.check_call([sys.executable, "-m", "pip", "install", package])
+
+from flask import Flask, render_template_string, request, Response, jsonify
 import pyautogui
-from mss import mss
-from PIL import Image
+import mss
+import io
+import time
 
 app = Flask(__name__)
-
-# Désactive le frein de sécurité PyAutoGUI
 pyautogui.FAILSAFE = False
-
-# Flux vidéo de l'écran en direct
-def generate_screen():
-    with mss() as sct:
-        monitor = sct.monitors[1]
-        while True:
-            sct_img = sct.grab(monitor)
-            img = Image.frombytes("RGB", sct_img.size, sct_img.bgra, "raw", "BGRX")
-            img.thumbnail((800, 600))
-            
-            buffer = io.BytesIO()
-            img.save(buffer, format="JPEG", quality=45)
-            frame = buffer.getvalue()
-            
-            yield (b'--frame\r\n'
-                   b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
 
 HTML_PAGE = """
 <!DOCTYPE html>
-<html lang="fr">
+<html>
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Télécommande PC + Touchpad</title>
+    <title>Remote PC Control</title>
     <style>
-        * { box-sizing: border-box; touch-action: manipulation; user-select: none; }
-        body { 
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; 
-            background: #121212; 
-            color: #ffffff; 
-            margin: 0; 
-            padding: 10px; 
-            display: flex; 
-            flex-direction: column; 
-            align-items: center; 
-        }
-        
-        .screen-container {
-            width: 100%;
-            max-width: 500px;
-            background: #000;
-            border-radius: 10px;
-            overflow: hidden;
-            border: 2px solid #333;
-            margin-bottom: 10px;
-        }
-        .screen-container img { width: 100%; height: auto; display: block; }
-
-        .container { width: 100%; max-width: 500px; display: flex; flex-direction: column; gap: 10px; }
-        .section-title { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 1px; color: #888; margin-bottom: 3px; }
-        
-        /* Zone Tactile / Touchpad */
-        #touchpad {
-            width: 100%;
-            height: 140px;
-            background: #1e1e1e;
-            border: 2px dashed #444;
-            border-radius: 10px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: #666;
-            font-size: 0.9rem;
-            touch-action: none; /* Empêche le défilement de la page */
-        }
-
-        .grid { display: flex; flex-direction: column; gap: 6px; }
-        .row { display: flex; justify-content: center; gap: 6px; width: 100%; }
-        
-        button { 
-            flex: 1; 
-            height: 42px; 
-            font-size: 0.9rem; 
-            font-weight: bold; 
-            border-radius: 8px; 
-            border: none; 
-            background: #2a2a2a; 
-            color: #ffffff; 
-            display: flex;
-            align-items: center;
-            justify-content: center;
-        }
-        button:active { background: #007bff; }
-        .btn-win { background: #0078d4; }
-        .btn-action { background: #3a3a3a; }
-        .btn-danger { background: #d9534f; }
-        .btn-space { flex: 2; }
+        body { font-family: Arial, sans-serif; text-align: center; background: #222; color: #fff; }
+        img { max-width: 80%; border: 2px solid #555; margin-top: 10px; cursor: crosshair; }
+        #log { margin-top: 10px; color: #0ff; font-family: monospace; }
     </style>
 </head>
 <body>
-
-    <!-- Écran en direct -->
-    <div class="screen-container">
-        <img src="/video_feed" alt="Écran PC">
+    <h1>Controle PC distant</h1>
+    <div>
+        <img id="stream" src="/screenshot" onclick="handleClick(event)">
     </div>
-
-    <div class="container">
-        
-        <!-- Pavé Tactile -->
-        <div>
-            <div class="section-title">Pavé Tactile (Souris)</div>
-            <div id="touchpad">Glissez pour bouger la souris | Tapez pour cliquer</div>
-            <div class="row" style="margin-top: 5px;">
-                <button class="btn-action" onclick="sendMouseClick('left')">Clic Gauche</button>
-                <button class="btn-action" onclick="sendMouseClick('right')">Clic Droit</button>
-            </div>
-        </div>
-
-        <!-- Navigation -->
-        <div>
-            <div class="section-title">Clavier & Navigation</div>
-            <div class="grid">
-                <div class="row">
-                    <button class="btn-win" onclick="send('win')">❖ Win</button>
-                    <button onclick="send('up')">▲</button>
-                    <button class="btn-danger" onclick="send('backspace')">⌫</button>
-                </div>
-                <div class="row">
-                    <button onclick="send('left')">◀</button>
-                    <button class="btn-action" onclick="send('enter')">⏎ OK</button>
-                    <button onclick="send('right')">▶</button>
-                </div>
-                <div class="row">
-                    <button class="btn-action" onclick="send('esc')">Esc</button>
-                    <button onclick="send('down')">▼</button>
-                    <button class="btn-space" onclick="send('space')">Espace</button>
-                </div>
-            </div>
-        </div>
-
-        <!-- Clavier AZERTY -->
-        <div>
-            <div class="grid">
-                <div class="row">
-                    <button onclick="send('a')">A</button><button onclick="send('z')">Z</button>
-                    <button onclick="send('e')">E</button><button onclick="send('r')">R</button>
-                    <button onclick="send('t')">T</button><button onclick="send('y')">Y</button>
-                    <button onclick="send('u')">U</button><button onclick="send('i')">I</button>
-                    <button onclick="send('o')">O</button><button onclick="send('p')">P</button>
-                </div>
-                <div class="row">
-                    <button onclick="send('q')">Q</button><button onclick="send('s')">S</button>
-                    <button onclick="send('d')">D</button><button onclick="send('f')">F</button>
-                    <button onclick="send('g')">G</button><button onclick="send('h')">H</button>
-                    <button onclick="send('j')">J</button><button onclick="send('k')">K</button>
-                    <button onclick="send('l')">L</button><button onclick="send('m')">M</button>
-                </div>
-                <div class="row">
-                    <button onclick="send('w')">W</button><button onclick="send('x')">X</button>
-                    <button onclick="send('c')">C</button><button onclick="send('v')">V</button>
-                    <button onclick="send('b')">B</button><button onclick="send('n')">N</button>
-                </div>
-            </div>
-        </div>
-
-    </div>
+    <div id="log">Clique sur l'image et tape sur ton clavier...</div>
 
     <script>
-        function send(key) {
-            fetch('/press/' + key);
-            if (navigator.vibrate) navigator.vibrate(15);
+        // Rafraichissement de l'ecran
+        setInterval(() => {
+            document.getElementById('stream').src = '/screenshot?t=' + new Date().getTime();
+        }, 1000);
+
+        function handleClick(event) {
+            const rect = event.target.getBoundingClientRect();
+            const x = Math.round((event.clientX - rect.left) * (event.target.naturalWidth / rect.width));
+            const y = Math.round((event.clientY - rect.top) * (event.target.naturalHeight / rect.height));
+            
+            fetch('/click', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ x: x, y: y })
+            });
         }
 
-        function sendMouseClick(btn) {
-            fetch('/click/' + btn);
-            if (navigator.vibrate) navigator.vibrate(20);
-        }
-
-        // Logique du Pavé Tactile (Touchpad)
-        const pad = document.getElementById('touchpad');
-        let lastX = 0, lastY = 0;
-        let isMoving = false;
-        let hasMoved = false;
-
-        pad.addEventListener('touchstart', (e) => {
-            const touch = e.touches[0];
-            lastX = touch.clientX;
-            lastY = touch.clientY;
-            isMoving = true;
-            hasMoved = false;
-        });
-
-        pad.addEventListener('touchmove', (e) => {
-            if (!isMoving) return;
-            const touch = e.touches[0];
-            const dx = (touch.clientX - lastX) * 1.8; // Sensibilité X
-            const dy = (touch.clientY - lastY) * 1.8; // Sensibilité Y
-
-            if (Math.abs(dx) > 1 || Math.abs(dy) > 1) {
-                hasMoved = true;
-                fetch(`/move?dx=${dx}&dy=${dy}`);
-                lastX = touch.clientX;
-                lastY = touch.clientY;
+        // Capture des touches du clavier pour les envoyer au PC distant
+        window.addEventListener('keydown', (event) => {
+            // Empeche le comportement par défaut du navigateur pour certaines touches (comme Tab)
+            if (['Tab', 'Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(event.key)) {
+                event.preventDefault();
             }
-        });
 
-        pad.addEventListener('touchend', () => {
-            isMoving = false;
-            // Si le doigt n'a presque pas bougé, on considère cela comme un clic rapide
-            if (!hasMoved) {
-                sendMouseClick('left');
-            }
+            fetch('/key', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ key: event.key })
+            });
         });
     </script>
 </body>
@@ -217,38 +72,62 @@ HTML_PAGE = """
 """
 
 @app.route('/')
-def home():
+def index():
     return render_template_string(HTML_PAGE)
 
-@app.route('/video_feed')
-def video_feed():
-    return Response(generate_screen(), mimetype='multipart/x-mixed-replace; boundary=frame')
+@app.route('/screenshot')
+def screenshot():
+    with mss.mss() as sct:
+        monitor = sct.monitors[1]
+        sct_img = sct.grab(monitor)
+        from PIL import Image
+        img = Image.frombytes("RGB", sct_img.size, sct_img.bgra, "raw", "BGRX")
+        io_buf = io.BytesIO()
+        img.save(io_buf, format="JPEG", quality=70)
+        io_buf.seek(0)
+        return Response(io_buf.getvalue(), mimetype='image/jpeg')
 
-@app.route('/press/<key>')
-def press_key(key):
-    special_keys = {
-        'win': 'win', 'enter': 'enter', 'space': 'space', 
-        'backspace': 'backspace', 'esc': 'esc',
-        'up': 'up', 'down': 'down', 'left': 'left', 'right': 'right'
-    }
-    if key in special_keys:
-        pyautogui.press(special_keys[key])
-    elif len(key) == 1 and key.isalnum():
-        pyautogui.press(key)
-    return '', 204
+@app.route('/click', methods=['POST'])
+def click():
+    data = request.get_json()
+    if data and 'x' in data and 'y' in data:
+        pyautogui.click(x=data['x'], y=data['y'])
+        return jsonify({"status": "success"})
+    return jsonify({"status": "error"}), 400
 
-@app.route('/move')
-def move_mouse():
-    dx = float(request.args.get('dx', 0))
-    dy = float(request.args.get('dy', 0))
-    pyautogui.moveRel(dx, dy)
-    return '', 204
-
-@app.route('/click/<btn>')
-def click_mouse(btn):
-    if btn in ['left', 'right']:
-        pyautogui.click(button=btn)
-    return '', 204
+@app.route('/key', methods=['POST'])
+def press_key():
+    data = request.get_json()
+    key = data.get('key')
+    
+    if key:
+        # Correspondance entre les touches JS et les commandes PyAutoGUI si besoin
+        key_map = {
+            "Enter": "enter",
+            "Backspace": "backspace",
+            "Tab": "tab",
+            "Escape": "esc",
+            " ": "space",
+            "ArrowUp": "up",
+            "ArrowDown": "down",
+            "ArrowLeft": "left",
+            "ArrowRight": "right",
+            "Control": "ctrl",
+            "Alt": "alt",
+            "Meta": "win"  # Touche Windows
+        }
+        
+        target_key = key_map.get(key, key)
+        
+        try:
+            # Si c'est un seul caractere (lettre, chiffre), on utilise press()
+            if len(target_key) == 1:
+                pyautogui.press(target_key)
+            else:
+                pyautogui.press(target_key)
+            return jsonify({"status": "success", "key": target_key})
+        except Exception as e:
+            return jsonify({"status": "error", "message": str(e)}), 500
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000, threaded=True)
+    app.run(host='0.0.0.0', port=5000)
